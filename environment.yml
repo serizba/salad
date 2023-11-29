@@ -1,0 +1,20 @@
+name: salad2
+channels:
+  - defaults
+  - xformers
+  - pytorch
+  - nvidia
+dependencies:
+  - python=3.10
+  - pytorch::pytorch==2.1.0
+  - pytorch::pytorch-cuda=12.1
+  - pytorch::torchvision==0.16.0
+  - xformers
+  - pip
+  - pip:
+    - faiss-gpu==1.7.2
+    - pandas==2.1.3
+    - prettytable==3.9.0
+    - pytorch-lightning==2.1.2
+    - pytorch-metric-learning==2.3.0
+    - torchmetrics==1.2.0

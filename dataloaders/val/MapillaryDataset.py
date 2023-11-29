@@ -1,8 +1,5 @@
-from torch.utils.data import Dataset, DataLoader
-import torchvision.transforms as T
+from torch.utils.data import Dataset
 
-import matplotlib.pyplot as plt
-import torch
 import numpy as np
 from PIL import Image
 
@@ -30,8 +27,6 @@ class MSLS(Dataset):
 
         if self.input_transform:
             img = self.input_transform(img)
-
-        # print('SHAPE:', img.shape)
 
         return img, index
 
