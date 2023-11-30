@@ -21,6 +21,14 @@ It has been tested on Pytorch 2.1.0 with CUDA 12.1 and Xformers. Create a ready 
 conda env create -f environment.yml
 ```
 
+To quickly test and use our model, you can use Torch Hub:
+```python
+import torch
+model = torch.hub.load("serizba/salad", "dinov2_salad")
+model.eval()
+model.cuda()
+```
+
 ## Dataset
 
 For training, download [GSV-Cities](https://github.com/amaralibey/gsv-cities) dataset. For evaluation download the desired datasets ([MSLS](https://github.com/FrederikWarburg/mapillary_sls), [NordLand](https://surfdrive.surf.nl/files/index.php/s/sbZRXzYe3l0v67W), [SPED](https://surfdrive.surf.nl/files/index.php/s/sbZRXzYe3l0v67W), or [Pittsburgh](https://data.ciirc.cvut.cz/public/projects/2015netVLAD/Pittsburgh250k/))
