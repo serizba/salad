@@ -1,4 +1,4 @@
-name: salad2
+name: salad
 channels:
   - defaults
   - xformers
