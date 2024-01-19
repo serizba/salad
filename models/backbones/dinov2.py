@@ -67,10 +67,21 @@ class DINOv2(nn.Module):
         
         t = x[:, 0]
         f = x[:, 1:]
-
+        
         # Reshape to (B, C, H, W)
         f = f.reshape((B, H // 14, W // 14, self.num_channels)).permute(0, 3, 1, 2)
 
         if self.return_token:
             return f, t
         return f
+
+
+if __name__ == '__main__':
+    import timm
+    DEVICE = 6
+    
+    sample = torch.randn(2, 3, 224, 224).cuda(DEVICE)
+    net1 = DINOv2(return_token=True).cuda(DEVICE)
+    
+    f, t = net1(sample)
+    

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 
+
 # Code from SuperGlue (https://github.com/magicleap/SuperGluePretrainedNetwork/blob/master/models/superglue.py)
 def log_sinkhorn_iterations(Z: torch.Tensor, log_mu: torch.Tensor, log_nu: torch.Tensor, iters: int) -> torch.Tensor:
     """ Perform Sinkhorn Normalization in Log-space for stability"""
@@ -9,6 +10,7 @@ def log_sinkhorn_iterations(Z: torch.Tensor, log_mu: torch.Tensor, log_nu: torch
         u = log_mu - torch.logsumexp(Z + v.unsqueeze(1), dim=2)
         v = log_nu - torch.logsumexp(Z + u.unsqueeze(2), dim=1)
     return Z + u.unsqueeze(2) + v.unsqueeze(1)
+
 
 # Code from SuperGlue (https://github.com/magicleap/SuperGluePretrainedNetwork/blob/master/models/superglue.py)
 def log_optimal_transport(scores: torch.Tensor, alpha: torch.Tensor, iters: int) -> torch.Tensor:
@@ -53,7 +55,7 @@ class SALAD(nn.Module):
         super().__init__()
 
         self.num_channels = num_channels
-        self.num_clusters= num_clusters
+        self.num_clusters = num_clusters
         self.cluster_dim = cluster_dim
         self.token_dim = token_dim
         
@@ -85,7 +87,6 @@ class SALAD(nn.Module):
         # Dustbin parameter z
         self.dust_bin = nn.Parameter(torch.tensor(1.))
 
-
     def forward(self, x):
         """
         x (tuple): A tuple containing two elements, f and t. 
@@ -104,9 +105,9 @@ class SALAD(nn.Module):
         # Sinkhorn algorithm
         p = log_optimal_transport(p, self.dust_bin, 3)
         p = torch.exp(p)
+        
         # Normalize to maintain mass
         p = p[:, :-1, :]
-
 
         p = p.unsqueeze(1).repeat(1, self.cluster_dim, 1, 1)
         f = f.unsqueeze(2).repeat(1, 1, self.num_clusters, 1)
@@ -117,3 +118,41 @@ class SALAD(nn.Module):
         ], dim=-1)
 
         return nn.functional.normalize(f, p=2, dim=-1)
+
+
+if __name__ == '__main__':
+    B, C, H, W = 2, 3, 224, 224  # ...| the image size
+    P, D = 14, 384  # ................| patch size, dimension
+    PH, PW = H//P, W//P  # ...........| number of patches
+    R = 2  # .........................| the reduction rate
+    print()
+    
+    salad = SALAD(num_channels=D)
+    x = torch.randn(B, PH * PW + 1, D)
+    print('[INPUT]')
+    print(f'{x.shape=}')
+    print()
+    
+    f, t = x[:, 1:], x[:, 0]
+    print('[TRANSFORMER]')
+    print(f'{t.shape=}')
+    print(f'{f.shape=}')
+    print()
+    
+    f = f[:, ::R*R]
+    print('[REDUCTION]')
+    print(f'{f.shape=}')
+    print()
+    
+    f = f.reshape(B, PH//R, PW//R, D)
+    f = f.permute(0, 3, 1, 2)
+    print('[RESHAPE]')
+    print(f'{t.shape=}')
+    print(f'{f.shape=}')
+    print()
+    
+    y = salad((f, t))
+    print('[SALAD]')
+    print(f'{y.shape=}')
+    print()
+    

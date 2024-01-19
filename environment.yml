@@ -7,7 +7,7 @@ channels:
 dependencies:
   - python=3.10
   - pytorch::pytorch==2.1.0
-  - pytorch::pytorch-cuda=12.1
+  - pytorch::pytorch-cuda=11.8
   - pytorch::torchvision==0.16.0
   - xformers
   - pip
@@ -18,3 +18,4 @@ dependencies:
     - pytorch-lightning==2.1.2
     - pytorch-metric-learning==2.3.0
     - torchmetrics==1.2.0
+    - timm
