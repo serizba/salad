@@ -1,3 +1,8 @@
+if __name__ == '__main__':
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent.parent))
+
 import torch
 import torch.nn as nn
 
@@ -121,30 +126,29 @@ class SALAD(nn.Module):
 
 
 if __name__ == '__main__':
-    B, C, H, W = 2, 3, 224, 224  # ...| the image size
-    P, D = 14, 384  # ................| patch size, dimension
-    PH, PW = H//P, W//P  # ...........| number of patches
-    R = 2  # .........................| the reduction rate
+    from models.backbones import EffDINOv2
+    
+    B, C, H, W = 4, 3, 224, 224  # ......| the image size
+    P, D = 14, 384  # ...................| patch size, dimension
+    PH, PW = H//P, W//P  # ..............| number of patches
+    M = 0.4  # ..........................| the patch masking rate
+    RP = int(((PH * PW) - M)**0.5)  # ...| number of recuded patches
     print()
     
-    salad = SALAD(num_channels=D)
-    x = torch.randn(B, PH * PW + 1, D)
+    net = EffDINOv2(masking_rate=0.4, return_token=True)
+    salad = SALAD(num_channels=net.embed_dim)
+    x = torch.randn(B, C, H, W)
     print('[INPUT]')
     print(f'{x.shape=}')
     print()
     
-    f, t = x[:, 1:], x[:, 0]
+    f, t = net(x)
     print('[TRANSFORMER]')
     print(f'{t.shape=}')
     print(f'{f.shape=}')
     print()
     
-    f = f[:, ::R*R]
-    print('[REDUCTION]')
-    print(f'{f.shape=}')
-    print()
-    
-    f = f.reshape(B, PH//R, PW//R, D)
+    f = f.reshape(B, net.kept_patches_row, net.kept_patches_row, net.embed_dim)
     f = f.permute(0, 3, 1, 2)
     print('[RESHAPE]')
     print(f'{t.shape=}')
@@ -155,4 +159,3 @@ if __name__ == '__main__':
     print('[SALAD]')
     print(f'{y.shape=}')
     print()
-    

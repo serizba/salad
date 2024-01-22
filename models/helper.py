@@ -18,6 +18,9 @@ def get_backbone(
     """
     if 'resnet' in backbone_arch.lower():
         return backbones.ResNet(backbone_arch, **backbone_config)
+    
+    elif 'effdinov2' in backbone_arch.lower():
+        return backbones.EffDINOv2(**backbone_config)
 
     elif 'dinov2' in backbone_arch.lower():
         return backbones.DINOv2(model_name=backbone_arch, **backbone_config)

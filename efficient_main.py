@@ -1,6 +1,7 @@
 import pytorch_lightning as pl
+import pytorch_lightning.callbacks as pl_callbacks
 
-from vpr_model import VPRModel
+from efficient_vpr_model import VPRModel
 from dataloaders.GSVCitiesDataloader import GSVCitiesDataModule
 
 if __name__ == '__main__':        
@@ -16,19 +17,27 @@ if __name__ == '__main__':
         val_set_names=[
             # 'pitts30k_val', 
             # 'pitts30k_test', 
-            'nordland'
-            'msls_val', 
+            'msls_val'
         ], # pitts30k_val, pitts30k_test, msls_val
     )
     
     model = VPRModel(
         #---- Encoder
-        backbone_arch='dinov2_vitb14',
+        backbone_arch='effdinov2',
         backbone_config={
-            'num_trainable_blocks': 4,
+            'model_name': 'small',
+            'masked_block': 8,
             'return_token': True,
             'norm_layer': True,
         },
+        teacher_arch='None',
+        # teacher_arch='effdinov2',
+        # teacher_config={
+        #     'model_name': 'base',
+        #     'masked_block': 8,
+        #     'return_token': True,
+        #     'norm_layer': True,
+        # },
         agg_arch='SALAD',
         agg_config={
             'num_channels': 768,
@@ -58,7 +67,7 @@ if __name__ == '__main__':
 
     # model params saving using Pytorch Lightning
     # we save the best 3 models accoring to Recall@1 on pittsburg val
-    checkpoint_cb = pl.callbacks.ModelCheckpoint(
+    checkpoint_cb = pl_callbacks.ModelCheckpoint(
         monitor='pitts30k_val/R1',
         filename=f'{model.encoder_arch}' + '_({epoch:02d})_R1[{pitts30k_val/R1:.4f}]_R5[{pitts30k_val/R5:.4f}]',
         auto_insert_metric_name=False,

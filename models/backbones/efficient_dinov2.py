@@ -116,13 +116,13 @@ class Block(timm.models.vision_transformer.Block):
             return self.forward_mlp_res(x)
 
 
-class EfficientVisionTransformer(timm.models.VisionTransformer):
+class EffDINOv2(timm.models.VisionTransformer):
     def __init__(
             self,
             model_name: str='small', 
             img_size: int=224,
-            distill_block: int=9,
-            num_masks: int=112, 
+            masked_block: int=9,
+            masking_rate: float=0.4, 
             return_token: bool=False,
             norm_layer: bool=False,
             dino_v2_pretrained: bool=True,
@@ -131,13 +131,19 @@ class EfficientVisionTransformer(timm.models.VisionTransformer):
         self.img_size = img_size
         self.patch_size = 14
         self.embed_dim = TIMM_DINOV2_ARCHS[model_name]
-        self.distill_block = distill_block
-        self.num_masks = num_masks
+        self.masked_block = masked_block
         self.num_patches = (img_size // 14)**2  # the number of patches except for the cls token.
         self.return_token = return_token
         self.norm_layer = norm_layer
         
-        super(EfficientVisionTransformer, self).__init__(
+        if not (0 <= masking_rate < 1):
+            raise ValueError(f'Masking rate must be in [0, 1).')
+        self.kept_patches = int((self.num_patches - int(self.num_patches * masking_rate)) ** 0.5)
+        self.num_masks = int(self.num_patches - (self.kept_patches ** 2))
+        self.masking_rate = self.num_masks / self.num_patches
+        self.kept_patches_row = int((self.num_patches - self.num_masks) ** 0.5)
+        
+        super(EffDINOv2, self).__init__(
             img_size=img_size, 
             patch_size=self.patch_size, 
             num_classes=0, 
@@ -164,15 +170,16 @@ class EfficientVisionTransformer(timm.models.VisionTransformer):
         x = self.patch_drop(x)
         x = self.norm_pre(x)
         if self.grad_checkpointing and not torch.jit.is_scripting():
-            x = checkpoint_seq(self.blocks[:self.distill_block], x)
+            x = checkpoint_seq(self.blocks[:self.masked_block], x)
         else:
-            x = self.blocks[:self.distill_block](x)
+            x = self.blocks[:self.masked_block](x)
         return x
     
     def prune_dissimilar(
         self, 
         x1: torch.Tensor, 
         x2: torch.Tensor, 
+        return_mask: bool=False,
     ) -> (torch.Tensor, torch.Tensor):
         '''
         x1, x2: B, NP+1, DIM
@@ -197,13 +204,19 @@ class EfficientVisionTransformer(timm.models.VisionTransformer):
         masked_f1 = masked_f1[indices].reshape(batch_size, num_keeps, feat_dim)
         masked_f2 = masked_f2[indices].reshape(batch_size, num_keeps, feat_dim) 
         
-        return torch.cat([t1, masked_f1], dim=1), torch.cat([t2, masked_f2], dim=1)
+        out1 = torch.cat([t1, masked_f1], dim=1)
+        out2 = torch.cat([t2, masked_f2], dim=1)
+        
+        if return_mask:
+            return out1, out2, mask_hard.squeeze(-1)
+        else:
+            return out1, out2
         
     def forward_in(self, x: torch.Tensor, acquire_attn: bool=False) -> torch.Tensor: 
-        return self.blocks[self.distill_block](x, acquire_attn=acquire_attn)
+        return self.blocks[self.masked_block](x, acquire_attn=acquire_attn)
     
     def forward_post(self, x: torch.Tensor) -> torch.Tensor:
-        return self.norm(self.blocks[self.distill_block+1:](x))
+        return self.norm(self.blocks[self.masked_block+1:](x))
 
     def forward_features(self, x: torch.Tensor, prune: bool=True, acquire_attn: bool=False) -> torch.Tensor: 
         x = self.forward_pre(x)
@@ -213,7 +226,7 @@ class EfficientVisionTransformer(timm.models.VisionTransformer):
                 raise RuntimeError('The batch size must be even to prune by similarity between domains.')
             half_size = batch_size // 2
             x1, x2 = torch.split(x, (half_size, half_size), dim=0)
-            x = self.prune_dissimilar(x1, x2, num_masks=self.num_masks)
+            x = self.prune_dissimilar(x1, x2)
             x = torch.cat(x, dim=0)
         
         if acquire_attn:
@@ -238,8 +251,8 @@ class EfficientVisionTransformer(timm.models.VisionTransformer):
         
         f = f.reshape(
             f.size(0), 
-            num_patches_row,
-            num_patches_row,
+            self.kept_patches_row,
+            self.kept_patches_row,
             self.embed_dim,
         ).permute(0, 3, 1, 2)
         
@@ -262,7 +275,7 @@ if __name__ == '__main__':
     DEVICE = 6
     
     sample = torch.randn(4, 3, 224, 224).cuda(DEVICE)
-    net = EfficientVisionTransformer(return_token=True).cuda(DEVICE)
+    net = EffDINOv2(return_token=True).cuda(DEVICE)
     
     out_pre = net.forward_pre(sample)
     print(f'{out_pre.shape=}')
@@ -282,6 +295,3 @@ if __name__ == '__main__':
     out_head_f, out_head_t = net.forward_head(out_post)
     print(f'{out_head_f.shape=}')
     print(f'{out_head_t.shape=}')
-    
-
-    
