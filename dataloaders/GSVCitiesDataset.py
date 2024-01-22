@@ -1,3 +1,8 @@
+if __name__ == '__main__':
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent))
+
 # https://github.com/amaralibey/gsv-cities
 
 import pandas as pd
@@ -7,6 +12,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 import torch
 from torch.utils.data import Dataset
 import torchvision.transforms as T
+from dataloaders import make_path
 
 default_transform = T.Compose([
     T.ToTensor(),
@@ -14,7 +20,7 @@ default_transform = T.Compose([
 ])
 
 # NOTE: Hard coded path to dataset folder 
-BASE_PATH = '../data/GSVCities/'
+BASE_PATH = make_path('GSV-cities')
 
 if not Path(BASE_PATH).exists():
     raise FileNotFoundError(

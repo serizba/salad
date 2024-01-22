@@ -1,3 +1,8 @@
+if __name__ == '__main__':
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent))
+
 from os.path import join, exists
 from collections import namedtuple
 from scipy.io import loadmat
@@ -8,8 +13,9 @@ import torch.utils.data as data
 
 from PIL import Image, UnidentifiedImageError
 from sklearn.neighbors import NearestNeighbors
+from dataloaders import make_path
 
-root_dir = '../data/Pittsburgh/'
+root_dir = make_path('Pittsburgh-Query')
 
 if not exists(root_dir):
     raise FileNotFoundError(

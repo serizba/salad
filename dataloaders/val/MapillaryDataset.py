@@ -1,9 +1,16 @@
+if __name__ == '__main__':
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent.parent))
+
 from torch.utils.data import Dataset
 
 import numpy as np
 from PIL import Image
 
-DATASET_ROOT = '../data/mapillary/'
+from dataloaders import make_path
+
+DATASET_ROOT = make_path('MSLS')
 GT_ROOT = './datasets/' # BECAREFUL, this is the ground truth that comes with GSV-Cities
 
 class MSLS(Dataset):
