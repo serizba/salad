@@ -97,15 +97,43 @@ class VPRModel(pl.LightningModule):
     # the forward pass of the lightning model
     @utils.yield_as(tuple)
     def forward(self, x):
-        x_student = self.backbone(x)
-        yield self.aggregator(x_student)
+        if self.training:
+            f, t, _, attn, pred_simm, simm = self.backbone(x)
+            # simm = simm.unsqueeze(1) # B, 1, NP
+            # simm = simm.reshape(simm.shape[0], simm.shape[1], -1)
         
-        if (not self.training) and (self.teacher is not None):
-            with torch.no_grad():
-                x_teacher = self.teacher(x)
-            yield self.aggregator(x_teacher)
+        # f = f.reshape(f.shape[0], f.sahpe[1], -1)
+        # weighted_f = f * re_simm # ............................| B, DIM, P, P
+        
         else:
-            yield None
+            f, t, _, attn, pred_simm, simm = self.backbone(x, calc_cosine=False)
+        
+        yield self.aggregator((f, t)), attn, pred_simm, simm
+        
+        # if self.training:
+        #     # 여기는 다음에 될 것 같음요
+        #     if self.teacher is not None:
+        #         mask = mask.detach().unsqueeze(1).bool() # B/2, 1, NP..? 왜 이렇게 해놓은걸까나..?
+        #         with torch.no_grad():
+        #             tea_f, tea_t, _, tea_attn, _ = self.teacher(x, prune=False) # feature : B, NP, DIM일거고 token은 : B, 1, DIM일거란 말이지
+        #             mask = torch.cat((mask, mask)) # B, 1, NP
+        #             tea_f = tea_f.view(tea_f.shape[0], tea_f.shape[1], -1)  # feature : B, NP, DIM으로 수정
+        #             masked_f = tea_f * mask
+        #             indices = mask.expand_as(mask)
+        #             masked_f = masked_f[indices].reshape(f.shape) # as same as student f
+                    
+        #             #att
+        #             tea_attn = tea_attn.view(tea_attn.shape[0], tea_attn.shape[1], -1) # B, NH, 
+        #             linear = nn.Linear(tea_attn.shape[-1], attn.shape[-1] * attn.shape[-2])
+        #             tea_attn = lienar(tea_attn)
+        #             tea_attn = tea_attn.view(attn.shape)
+                    
+        #             # TODO: mask (f, attn) by mask 
+        #         yield self.aggregator((masked_f, tea_t)), tea_attn
+        #     else:
+        #         yield None, None
+        # else:
+        #     pass
         
     @utils.yield_as(list)
     def parameters(self, recurse: bool=True) -> Iterator[Parameter]:
@@ -114,6 +142,7 @@ class VPRModel(pl.LightningModule):
         yield from self.backbone.norm.parameters(recurse=recurse)
         yield from self.backbone.fc_norm.parameters(recurse=recurse)
         yield from self.backbone.head_drop.parameters(recurse=recurse)
+        yield from self.backbone.predictor.parameters(recurse=recurse) # predictor parameter 추가
         yield from self.aggregator.parameters(recurse=recurse)
     
     # configure the optimizer 
@@ -132,7 +161,7 @@ class VPRModel(pl.LightningModule):
                 weight_decay=self.weight_decay
             )
         elif self.optimizer.lower() == 'adam':
-            optimizer = torch.optim.AdamW(
+            optimizer = torch.optim.Adam(
                 self.parameters(), 
                 lr=self.lr, 
                 weight_decay=self.weight_decay
@@ -162,7 +191,7 @@ class VPRModel(pl.LightningModule):
         self.lr_schedulers().step()
         
     #  The loss function call (this method will be called at each training iteration)
-    def loss_function(self, descriptors, labels, log_accuracy: bool=False):
+    def loss_function(self, descriptors, labels, pred_simm, simm, log_accuracy: bool=False):
         
         # we mine the pairs/triplets if there is an online mining strategy
         if self.miner is not None:
@@ -174,6 +203,7 @@ class VPRModel(pl.LightningModule):
             nb_samples = descriptors.shape[0]
             nb_mined = len(set(miner_outputs[0].detach().cpu().numpy()))
             batch_acc = 1.0 - (nb_mined/nb_samples)
+            #contrastive,,,?
 
         else: # no online mining
             loss = self.loss_fn(descriptors, labels)
@@ -192,8 +222,22 @@ class VPRModel(pl.LightningModule):
             # log it
             self.log('b_acc', sum(self.batch_acc) /
                     len(self.batch_acc), prog_bar=True, logger=True)
+        
+        # MSE ver.
+        # simm_loss = torch.nn.MSELoss()(pred_simm, simm)
+        
+        # split_pred = torch.chunk(pred_simm, chunks=2, dim=0)
+        # simm_loss += torch.nn.MSELoss()(split_pred[0], split_pred[1])
+        # total_loss = loss + simm_loss
+        
+        # L1 ver.
+        simm_loss = torch.nn.L1Loss()(pred_simm, simm)
+        
+        split_pred = torch.chunk(pred_simm, chunks=2, dim=0)
+        simm_loss += torch.nn.L1Loss()(split_pred[0], split_pred[1])
+        total_loss = loss + simm_loss
 
-        return loss
+        return total_loss, loss, simm_loss
     
     # This is the training step that's executed at each iteration
     def training_step(self, batch, batch_idx):
@@ -202,29 +246,43 @@ class VPRModel(pl.LightningModule):
         # Note that GSVCities yields places (each containing N images)
         # which means the dataloader will return a batch containing BS places
         BS, N, ch, h, w = places.shape
+        assert N == 2  # Our method forces each place to have exactly two images in a mini-batch. 
         
         # reshape places and labels
-        images = places.view(BS*N, ch, h, w)
-        labels = labels.view(-1)
+        # data 를 다시...
+        # images = places.view(BS*N, ch, h, w)
+        # labels = labels.view(-1)
+        image_1, image_2 = torch.chunk(places, chunks=2, dim=1)
+        image_1 = image_1.squeeze()
+        image_2 = image_2.squeeze()
+        images = torch.cat([image_1, image_2], dim=0)
+        
+        label_1, label_2 = torch.chunk(labels, chunks=2, dim=1)
+        label_1 = label_1.squeeze()
+        label_2 = label_2.squeeze()
+        labels = torch.cat([label_1, label_2])
 
         # Feed forward the ba6tch to the model
         # Here we are calling the method forward that we defined above
-        descriptors_student, descriptors_teacher = self(images) 
-
+        
+        (output) = self(images) 
+        descriptors_student, _, pred_simm, simm = output[0]
         if torch.isnan(descriptors_student).any():
             raise ValueError('NaNs in descriptors')
-        if descriptors_teacher is not None:
-            if torch.isnan(descriptors_teacher).any():
-                raise ValueError('NaNs in descriptors')
+        # if descriptors_teacher is not None:
+        #     if torch.isnan(descriptors_teacher).any():
+        #         raise ValueError('NaNs in descriptors')
 
         # Call the loss_function we defined above
-        loss = self.loss_function(descriptors_student, labels, log_accuracy=True) 
+        loss, loss_cl, loss_simm = self.loss_function(descriptors_student, labels, pred_simm, simm, log_accuracy=True) 
         if self.teacher is not None:
             loss_teacher = self.loss_function(descriptors_teacher, labels, log_accuracy=False) 
             loss = loss + loss_teacher
         
         self.log('loss', loss.item(), logger=True, prog_bar=True)
-        return {'loss': loss}
+        self.log('loss_cl', loss_cl.item(), logger=True, prog_bar=True)
+        self.log('loss_simm', loss_simm.item(), logger=True, prog_bar=True)
+        return {'loss': loss, 'loss_cl': loss_cl, 'loss_simm':loss_simm}
     
     def on_train_epoch_end(self):
         # we empty the batch_acc list for next epoch
@@ -234,7 +292,8 @@ class VPRModel(pl.LightningModule):
     # this is the way Pytorch Lghtning is made. All about modularity, folks.
     def validation_step(self, batch, batch_idx, dataloader_idx=None):
         places, _ = batch
-        descriptors, _ = self(places)
+        output  = self(places)
+        descriptors, _, _, _ = output[0]
         self.val_outputs[dataloader_idx].append(descriptors.detach().cpu())
         return descriptors.detach().cpu()
     
@@ -267,6 +326,14 @@ class VPRModel(pl.LightningModule):
                 # split to ref and queries
                 num_references = val_dataset.num_references
                 positives = val_dataset.pIdx
+            elif 'nordland' in val_set_name:
+                # split to ref and queries
+                num_references = val_dataset.num_references
+                positives = val_dataset.ground_truth
+            elif 'sped' in val_set_name:
+                # split to ref and queries
+                num_references = val_dataset.num_references
+                positives = val_dataset.ground_truth
             else:
                 print(f'Please implement validation_epoch_end for {val_set_name}')
                 raise NotImplemented

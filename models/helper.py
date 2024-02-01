@@ -21,9 +21,12 @@ def get_backbone(
     
     elif 'effdinov2' in backbone_arch.lower():
         return backbones.EffDINOv2(**backbone_config)
+    
+    # elif 'mod' in backbone_arch.lower():
+    #     return backbones.mod_DINOv2(model_name=backbone_config['model_name'], **backbone_config)
 
     elif 'dinov2' in backbone_arch.lower():
-        return backbones.DINOv2(model_name=backbone_arch, **backbone_config)
+        return backbones.mod_DINOv2( **backbone_config)
 
 
 def get_aggregator(agg_arch='ConvAP', agg_config={}):

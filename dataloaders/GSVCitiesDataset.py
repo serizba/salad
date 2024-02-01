@@ -29,8 +29,8 @@ if not Path(BASE_PATH).exists():
 class GSVCitiesDataset(Dataset):
     def __init__(self,
                  cities=['London', 'Boston'],
-                 img_per_place=4,
-                 min_img_per_place=4,
+                 img_per_place=2,
+                 min_img_per_place=2,
                  random_sample_from_each_place=True,
                  transform=default_transform,
                  base_path=BASE_PATH

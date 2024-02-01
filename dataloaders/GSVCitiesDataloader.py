@@ -5,6 +5,8 @@ from torchvision import transforms as T
 from dataloaders.GSVCitiesDataset import GSVCitiesDataset
 from . import PittsburgDataset
 from . import MapillaryDataset
+# from .val.NordlandDataset import NordlandDataset
+# from .val.SPEDDataset import SPEDDataset
 
 from prettytable import PrettyTable
 
@@ -49,12 +51,13 @@ class GSVCitiesDataModule(pl.LightningDataModule):
                  shuffle_all=False,
                  image_size=(480, 640),
                  num_workers=4,
+                 persistent_workers=False, # for CPU
                  show_data_stats=True,
                  cities=TRAIN_CITIES,
                  mean_std=IMAGENET_MEAN_STD,
                  batch_sampler=None,
                  random_sample_from_each_place=True,
-                 val_set_names=['pitts30k_val', 'msls_val']
+                 val_set_names=['pitts30k_val', 'msls_val', 'pitts250k_val']
                  ):
         super().__init__()
         self.batch_size = batch_size
@@ -70,6 +73,7 @@ class GSVCitiesDataModule(pl.LightningDataModule):
         self.std_dataset = mean_std['std']
         self.random_sample_from_each_place = random_sample_from_each_place
         self.val_set_names = val_set_names
+        self.persistent_workers = persistent_workers
         self.save_hyperparameters() # save hyperparameter with Pytorch Lightening
 
         self.train_transform = T.Compose([
@@ -87,15 +91,17 @@ class GSVCitiesDataModule(pl.LightningDataModule):
         self.train_loader_config = {
             'batch_size': self.batch_size,
             'num_workers': self.num_workers,
+            'persistent_workers': self.persistent_workers,
             'drop_last': False,
-            'pin_memory': True,
+            'pin_memory': False,
             'shuffle': self.shuffle_all}
 
         self.valid_loader_config = {
             'batch_size': self.batch_size,
             'num_workers': self.num_workers//2,
+            'persistent_workers': self.persistent_workers,
             'drop_last': False,
-            'pin_memory': True,
+            'pin_memory': False,
             'shuffle': False}
 
     def setup(self, stage):
@@ -112,6 +118,24 @@ class GSVCitiesDataModule(pl.LightningDataModule):
                 elif valid_set_name.lower() == 'pitts30k_val':
                     self.val_datasets.append(PittsburgDataset.get_whole_val_set(
                         input_transform=self.valid_transform))
+                    
+                ## 수정한 부분 체크
+                ## 시작
+                elif valid_set_name.lower() == 'pitts250k_test':
+                    self.val_datasets.append(PittsburgDataset.get_250k_test_set(
+                        input_transform=self.valid_transform))
+                elif valid_set_name.lower() == 'pitts250k_val':
+                    self.val_datasets.append(PittsburgDataset.get_250k_val_set(
+                        input_transform=self.valid_transform))
+                    
+                elif valid_set_name.lower() == 'nordland':
+                    self.val_datasets.append(NordlandDataset(
+                        input_transform=self.valid_transform))
+                elif valid_set_name.lower() == 'sped':
+                    self.val_datasets.append(SPEDDataset(
+                        input_transform=self.valid_transform))
+                ## 끝
+                    
                 elif valid_set_name.lower() == 'msls_val':
                     self.val_datasets.append(MapillaryDataset.MSLS(
                         input_transform=self.valid_transform))

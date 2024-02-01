@@ -17,6 +17,27 @@ TIMM_DINOV2_ARCHS = {
     'giant' : 1536,
 }
 
+## dyvit에서 가져옴
+class Predictor(nn.Module):
+    def __init__(self, num_patch, embed_dim):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_patch = num_patch
+        self.in_conv = nn.Sequential(
+            # nn.LayerNorm(self.embed_dim * self.num_patch * 2),
+            nn.Linear(self.embed_dim * self.num_patch, self.num_patch),
+            # nn.Tanh()
+        )
+
+    def forward(self, x):
+        # x1, x2 ---> B, NP, DIM
+        B, NP, DIM = x.shape
+        x = x.reshape(B, NP * DIM)
+        x = self.in_conv(x) # x ---> B* NP
+        # softmax를 한 번 거쳐서 out을 해야할지...?
+        x = x.reshape(B, NP)
+        return x
+
 
 class Attention(timm.models.vision_transformer.Attention):
     def forward(self, x: torch.Tensor, acquire_attn: bool=False) -> torch.Tensor:
@@ -151,6 +172,7 @@ class EffDINOv2(timm.models.VisionTransformer):
             embed_dim=self.embed_dim, 
             block_fn=Block, 
         )
+
         
         if dino_v2_pretrained:
             pretrained_name = f'vit_{self.model_name}_patch14_dinov2.lvd142m'
@@ -158,11 +180,16 @@ class EffDINOv2(timm.models.VisionTransformer):
             state_dict['pos_embed'] = self.pos_embed
             self.load_state_dict(state_dict)
         
+        self.predictor = Predictor(num_patch=self.num_patches , embed_dim=self.embed_dim)
+        
     ''' Forward Tree 
-        forward - forward_features  - forward_pre 
-                                    - forward_in 
-                                    - forward_post 
-                - forward_head 
+        forward 
+            - forward_features 
+                - forward_pre 
+                - prune_dissimilar (optional)
+                - forward_in 
+                - forward_post 
+            - forward_head 
     ''' 
     def forward_pre(self, x: torch.Tensor) -> torch.Tensor:
         x = self.patch_embed(x)
@@ -175,66 +202,108 @@ class EffDINOv2(timm.models.VisionTransformer):
             x = self.blocks[:self.masked_block](x)
         return x
     
-    def prune_dissimilar(
+    def prune_dissimm(
         self, 
-        x1: torch.Tensor, 
-        x2: torch.Tensor, 
-        return_mask: bool=False,
-    ) -> (torch.Tensor, torch.Tensor):
+        x: torch.Tensor, 
+        simm: torch.Tensor or None 
+    ) -> (torch.Tensor, torch.Tensor, torch.Tensor):
         '''
         x1, x2: B, NP+1, DIM
         '''
-        if x1.shape != x2.shape:
-            raise RuntimeError('The shape of the two tensors must equal.')
-        batch_size, num_patches, feat_dim = x1.shape
+        batch_size, num_patches, feat_dim = x.shape
         num_patches -= 1
         
-        t1, f1 = x1[:, 0, None], x1[:, 1:]
-        t2, f2 = x2[:, 0, None], x2[:, 1:]
+        t, f = x[:, 0, None], x[:, 1:] # f1 --> B/2, NP, DIM
         
         num_keeps = num_patches - self.num_masks
-        simm = torch.nn.functional.cosine_similarity(f1, f2, dim=2)  #...| B, NP
-        simm = simm.unsqueeze(-1)  # ....................................| B, NP, 1
-        mask_hard = gumbel_topk(simm, k=num_keeps, dim=1)  #.............| B, NP, 1
-        masked_f1 = f1 * mask_hard 
-        masked_f2 = f2 * mask_hard 
+        
+        # Predictor
+        pred_simm = self.predictor.forward(f)  #...............................| B, NP
+        pred_simm = pred_simm.unsqueeze(-1)  #.................................| B, NP, 1
+        
+        if simm is not None: # simm을 계산한 Training phase의 경우
+            mask_hard = gumbel_topk(simm, k=num_keeps, dim=1)#................| B, NP, 1
+        else:
+            mask_hard = gumbel_topk(pred_simm, k=num_keeps, dim=1)
+        masked_f = f * mask_hard 
         
         indices = mask_hard.detach().bool()  # ................| B, NP, 1
-        indices = indices.expand_as(masked_f1)  # .............| B, NP, DIM
-        masked_f1 = masked_f1[indices].reshape(batch_size, num_keeps, feat_dim)
-        masked_f2 = masked_f2[indices].reshape(batch_size, num_keeps, feat_dim) 
+        indices = indices.expand_as(masked_f)  # .............| B, NP, DIM
+        masked_f = masked_f[indices].reshape(batch_size, num_keeps, feat_dim)
         
-        out1 = torch.cat([t1, masked_f1], dim=1)
-        out2 = torch.cat([t2, masked_f2], dim=1)
+        out = torch.cat([t, masked_f], dim=1)
+
+        return out, pred_simm # .......| B, NP, 1
+    
+    def calc_cosine(
+        self, 
+        x1: torch.Tensor, 
+        x2: torch.Tensor, 
+    ) -> (torch.Tensor, torch.Tensor, torch.Tensor):
+        '''
+        x1, x2: B, NP+1, DIM
+        only training.
+        '''
+        if x1.shape != x2.shape:
+            raise RuntimeError('The shape of the two tensors must equal.')
         
-        if return_mask:
-            return out1, out2, mask_hard.squeeze(-1)
-        else:
-            return out1, out2
+        t1, f1 = x1[:, 0, None], x1[:, 1:]
+        t2, f2 = x2[:, 0, None], x2[:, 1:] # f1 --> B/2, NP, DIM
         
-    def forward_in(self, x: torch.Tensor, acquire_attn: bool=False) -> torch.Tensor: 
-        return self.blocks[self.masked_block](x, acquire_attn=acquire_attn)
+        simm = torch.nn.functional.cosine_similarity(f1, f2, dim=2)  #...| B/2, NP
+        simm = torch.cat([simm, simm], dim=0) #...| B, NP
+        
+        return simm.unsqueeze(-1) # .......| B, NP, 1
+    
+    def predict_cosine(
+        self, 
+        x: torch.Tensor,
+    ):
+        t, f = x[:, 0, None], x[:, 1:] # f --> B, NP, DIM
+        # Predictor
+        pred_simm = self.predictor.forward(f)  #...............................| B, NP
+        pred_simm = pred_simm.unsqueeze(-1)  #.................................| B, NP, 1
+        
+        # masked_f = f * pred_simm
+        # x = torch.cat([t, masked_f], dim=1)
+        
+        return pred_simm
+    
+    def forward_in(self, x: torch.Tensor) -> torch.Tensor: 
+        return self.blocks[self.masked_block](x, acquire_attn=True)
     
     def forward_post(self, x: torch.Tensor) -> torch.Tensor:
         return self.norm(self.blocks[self.masked_block+1:](x))
 
-    def forward_features(self, x: torch.Tensor, prune: bool=True, acquire_attn: bool=False) -> torch.Tensor: 
+    def forward_features(self, x: torch.Tensor, calc_cosine: bool=True) -> torch.Tensor: 
         x = self.forward_pre(x)
-        if prune:
+        if calc_cosine: # it will be activated at training 
             batch_size = x.size(0)
             if batch_size % 2 != 0:
                 raise RuntimeError('The batch size must be even to prune by similarity between domains.')
             half_size = batch_size // 2
             x1, x2 = torch.split(x, (half_size, half_size), dim=0)
-            x = self.prune_dissimilar(x1, x2)
-            x = torch.cat(x, dim=0)
-        
-        if acquire_attn:
-            x, attn = self.forward_in(x, acquire_attn=True)
-            return self.forward_post(x), attn
+            simm = self.calc_cosine(x1, x2)
         else:
-            x = self.forward_in(x, acquire_attn=False)
-            return self.forward_post(x)
+            simm = None
+            
+        # if prune:
+        #     x, pred_simm = self.prune_dissimm(x, simm)
+        pred_simm = self.predict_cosine(x)
+        
+        if simm is not None:
+            t, f = x[:, 0, None], x[:, 1:]
+            # weight = (simm + 1)/2
+            f = f * simm
+            x = torch.cat([t, f], dim=1)
+        else:
+            t, f = x[:, 0, None], x[:, 1:]
+            # weight = (pred_simm + 1)/2
+            f = f * pred_simm
+            x = torch.cat([t, f], dim=1)
+            
+        x, attn = self.forward_in(x)
+        return self.forward_post(x), attn, pred_simm, simm
         
     def forward_head(self, x: torch.Tensor) -> torch.Tensor:
         if self.norm_layer:
@@ -244,48 +313,57 @@ class EffDINOv2(timm.models.VisionTransformer):
         t = x[:, 0]  # class token
         f = x[:, 1:]  # feature tokens
         
-        num_patches_row = f.size(1) ** 0.5
-        if int(num_patches_row) != num_patches_row:
-            raise ValueError('The tokens are not square.')
-        num_patches_row = int(num_patches_row)
-        
-        f = f.reshape(
-            f.size(0), 
-            self.kept_patches_row,
-            self.kept_patches_row,
-            self.embed_dim,
-        ).permute(0, 3, 1, 2)
+        if f.numel() == (f.size(0) * self.kept_patches_row * self.kept_patches_row * self.embed_dim):
+            f = f.reshape(
+                f.size(0), 
+                self.kept_patches_row,
+                self.kept_patches_row,
+                self.embed_dim,
+            ).permute(0, 3, 1, 2)
+        else:
+            num_patches_row = self.img_size // self.patch_size
+            f = f.reshape(
+                f.size(0),
+                num_patches_row,
+                num_patches_row,
+                self.embed_dim,
+            ).permute(0, 3, 1, 2)
         
         if self.return_token:
             return f, t
         else:
-            return f
+            return f, None
         
-    def forward(self, x: torch.Tensor, prune: bool=True, acquire_attn: bool=False) -> torch.Tensor:
-        if acquire_attn:
-            feats, attn = self.forward_features(x, prune=prune, acquire_attn=True)
-            return self.forward_head(feats), attn
-        else:
-            feats = self.forward_features(x, prune=prune, acquire_attn=False)
-            return self.forward_head(feats)
+    def forward(self, x: torch.Tensor, calc_cosine: bool=True) -> torch.Tensor:
+        feats, attn, pred_simm, simm = self.forward_features(x, calc_cosine=calc_cosine)
+        f, t = self.forward_head(feats)
+        return f, t, feats, attn, pred_simm, simm
 
 
 if __name__ == '__main__':
     import timm
-    DEVICE = 6
+    DEVICE = 0
     
     sample = torch.randn(4, 3, 224, 224).cuda(DEVICE)
     net = EffDINOv2(return_token=True).cuda(DEVICE)
+    
+    f, t, feats, attn, pred_simm, simm = net(sample, prune=True)
+    print(f'{f.shape=}')
+    print(f'{t.shape=}')
+    print(f'{attn.shape=}')
+    print(f'{pred_simm.shape=}')
+    print(f'{simm.shape=}')
     
     out_pre = net.forward_pre(sample)
     print(f'{out_pre.shape=}')
     
     out_pre_lhs, out_pre_rhs = torch.split(out_pre, (2, 2), dim=0)
     out_prn = net.prune_dissimilar(out_pre_lhs, out_pre_rhs)
-    out_prn = torch.cat(out_prn, dim=0)
+    print(f'{out_prn[2].shape=}')
+    out_prn = torch.cat((out_prn[0], out_prn[1]), dim=0)
     print(f'{out_prn.shape=}')
     
-    out_in, out_attn = net.forward_in(out_prn, acquire_attn=True)
+    out_in, out_attn = net.forward_in(out_prn)
     print(f'{out_in.shape=}')
     print(f'{out_attn.shape=}')
     

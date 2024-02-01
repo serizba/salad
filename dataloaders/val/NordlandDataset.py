@@ -28,8 +28,6 @@ if not path_obj.joinpath('ref') or not path_obj.joinpath('query'):
 
 class NordlandDataset(Dataset):
     def __init__(self, input_transform = None):
-        
-
         self.input_transform = input_transform
 
         # reference images names

@@ -15,7 +15,7 @@ from PIL import Image, UnidentifiedImageError
 from sklearn.neighbors import NearestNeighbors
 from dataloaders import make_path
 
-root_dir = make_path('Pittsburgh-Query')
+root_dir = make_path('Pittsburgh250k')
 
 if not exists(root_dir):
     raise FileNotFoundError(

@@ -99,7 +99,10 @@ class SALAD(nn.Module):
             (torch.Tensor): The token tensor (t_{n+1}) [B, C].
 
         Returns:
-            f (torch.Tensor): The global descriptor [B, m*l + g]
+                num_clusters (int): The number of clusters in the model (m).
+                cluster_dim (int): The number of channels of the clusters (l).
+                token_dim (int): The dimension of the global scene token (g).
+            f (torch.Tensor): The global descriptor [B, m*l + g] 얘는 input에 상관없이 salad에서 고정인듯
         """
         x, t = x # Extract features and token
 
@@ -137,25 +140,34 @@ if __name__ == '__main__':
     
     net = EffDINOv2(masking_rate=0.4, return_token=True)
     salad = SALAD(num_channels=net.embed_dim)
-    x = torch.randn(B, C, H, W)
-    print('[INPUT]')
-    print(f'{x.shape=}')
-    print()
+    # x = torch.randn(B, C, H, W)
+    # x2 = torch.randn(B, C, H, W)
+    # print('[INPUT]')
+    # print(f'{x.shape=}')
+    # print()
     
-    f, t = net(x)
+    # f, t, _, _, _ = net.forward(x)
+    # f.shape=torch.Size([4, 384, 12, 12])
+    # t.shape=torch.Size([4, 384])
+    x1 = torch.randn(4, 384, 12, 12)
+    x2 = torch.randn(4, 384, 16, 16)
+    t = torch.randn(4, 384)
     print('[TRANSFORMER]')
     print(f'{t.shape=}')
-    print(f'{f.shape=}')
+    print(f'{x1.shape=}')
+    print(f'{x2.shape=}')
     print()
     
-    f = f.reshape(B, net.kept_patches_row, net.kept_patches_row, net.embed_dim)
-    f = f.permute(0, 3, 1, 2)
-    print('[RESHAPE]')
-    print(f'{t.shape=}')
-    print(f'{f.shape=}')
-    print()
+    # f = f.reshape(B, net.kept_patches_row, net.kept_patches_row, net.embed_dim)
+    # f = f.permute(0, 3, 1, 2)
+    # print('[RESHAPE]')
+    # print(f'{t.shape=}')
+    # print(f'{f.shape=}')
+    # print()
     
-    y = salad((f, t))
+    y1 = salad((x1, t))
+    y2 = salad((x2, t))
     print('[SALAD]')
-    print(f'{y.shape=}')
+    print(f'{y1.shape=}')
+    print(f'{y1.shape=}')
     print()

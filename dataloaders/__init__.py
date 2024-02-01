@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 
-__DEFAULT = '/material/data/VPR'
+__DEFAULT = '/material/data/VPR/'
 if 'DATAROOT' in os.environ:
     DATAROOT = os.environ['DATAROOT']
     if DATAROOT is None:
