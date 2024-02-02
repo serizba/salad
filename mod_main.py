@@ -1,9 +1,9 @@
 import pytorch_lightning as pl
 import pytorch_lightning.callbacks as pl_callbacks
+from pytorch_lightning.strategies import DeepSpeedStrategy
 
 from mod_vpr_model import VPRModel
 from dataloaders.GSVCitiesDataloader import GSVCitiesDataModule
-
 
 DINOV2_ARCHS = {
     'dinov2_vits14': 384,
@@ -14,7 +14,7 @@ DINOV2_ARCHS = {
 
 if __name__ == '__main__':        
     datamodule = GSVCitiesDataModule(
-        batch_size=64,
+        batch_size=16,
         img_per_place=2,
         min_img_per_place=2,
         shuffle_all=False, # shuffle all images or keep shuffling in-city only
@@ -99,8 +99,9 @@ if __name__ == '__main__':
     #     log_every_n_steps=20,
     # )
     trainer = pl.Trainer(
-        accelerator='gpu',
-        devices=[5],
+        accelerator='gpu', 
+        # strategy = DeepSpeedStrategy(),
+        devices=1,
         default_root_dir=f'./logs/', # Tensorflow can be used to viz 
         num_nodes=1,
         num_sanity_val_steps=0, # runs a validation step before stating training

@@ -84,13 +84,10 @@ class VPRModel(pl.LightningModule):
         
     # the forward pass of the lightning model
     def forward(self, x):
-        if self.training:
-            f, t, pred_simm, simm = self.backbone(x)
+
+        f, t = self.backbone(x)
         
-        else:
-            f, t, pred_simm, simm = self.backbone(x, calc_cosine=False)
-        
-        return self.aggregator((f, t)), pred_simm, simm
+        return self.aggregator((f, t))
         
         
     @utils.yield_as(list)
@@ -100,7 +97,7 @@ class VPRModel(pl.LightningModule):
         yield from self.backbone.model.norm.parameters(recurse=recurse)
         # yield from self.backbone.model.fc_norm.parameters(recurse=recurse)
         # yield from self.backbone.model.head_drop.parameters(recurse=recurse)
-        yield from self.backbone.predictor.parameters(recurse=recurse) # predictor parameter 추가
+        # yield from self.backbone.predictor.parameters(recurse=recurse) # predictor parameter 추가
         yield from self.aggregator.parameters(recurse=recurse)
     
     # configure the optimizer 
@@ -149,7 +146,7 @@ class VPRModel(pl.LightningModule):
         self.lr_schedulers().step()
         
     #  The loss function call (this method will be called at each training iteration)
-    def loss_function(self, descriptors, labels, pred_simm, simm, log_accuracy: bool=False):
+    def loss_function(self, descriptors, labels, log_accuracy: bool=False):
         
         # we mine the pairs/triplets if there is an online mining strategy
         if self.miner is not None:
@@ -181,13 +178,13 @@ class VPRModel(pl.LightningModule):
             self.log('b_acc', sum(self.batch_acc) /
                     len(self.batch_acc), prog_bar=True, logger=True)
         
-        simm_loss = self.criterion(pred_simm, simm)
+        # simm_loss = self.criterion(pred_simm, simm)
         
-        split_pred = torch.chunk(pred_simm, chunks=2, dim=0)
-        simm_loss += self.criterion(split_pred[0], split_pred[1])
-        total_loss = loss + simm_loss
+        # split_pred = torch.chunk(pred_simm, chunks=2, dim=0)
+        # simm_loss += self.criterion(split_pred[0], split_pred[1])
+        # total_loss = loss + simm_loss
 
-        return total_loss, loss, simm_loss
+        return loss
     
     # This is the training step that's executed at each iteration
     def training_step(self, batch, batch_idx):
@@ -200,32 +197,31 @@ class VPRModel(pl.LightningModule):
         
         # reshape places and labels
         # data 를 다시...
-        # images = places.view(BS*N, ch, h, w)
-        # labels = labels.view(-1)
-        image_1, image_2 = torch.chunk(places, chunks=2, dim=1)
-        image_1 = image_1.squeeze()
-        image_2 = image_2.squeeze()
-        images = torch.cat([image_1, image_2], dim=0)
+        images = places.view(BS*N, ch, h, w)
+        labels = labels.view(-1)
+        # image_1, image_2 = torch.chunk(places, chunks=2, dim=1)
+        # image_1 = image_1.squeeze()
+        # image_2 = image_2.squeeze()
+        # images = torch.cat([image_1, image_2], dim=0)
         
-        label_1, label_2 = torch.chunk(labels, chunks=2, dim=1)
-        label_1 = label_1.squeeze()
-        label_2 = label_2.squeeze()
-        labels = torch.cat([label_1, label_2])
+        # label_1, label_2 = torch.chunk(labels, chunks=2, dim=1)
+        # label_1 = label_1.squeeze()
+        # label_2 = label_2.squeeze()
+        # labels = torch.cat([label_1, label_2])
 
         # Feed forward the ba6tch to the model
         # Here we are calling the method forward that we defined above
         
-        descriptors, pred_simm, simm = self(images) 
+        descriptors = self(images) 
         if torch.isnan(descriptors).any():
             raise ValueError('NaNs in descriptors')
 
         # Call the loss_function we defined above
-        loss, loss_cl, loss_simm = self.loss_function(descriptors, labels, pred_simm, simm, log_accuracy=True) 
+        loss = self.loss_function(descriptors, labels, log_accuracy=True) 
         
         self.log('loss', loss.item(), logger=True, prog_bar=True)
-        self.log('loss_cl', loss_cl.item(), logger=True, prog_bar=True)
-        self.log('loss_simm', loss_simm.item(), logger=True, prog_bar=True)
-        return {'loss': loss, 'loss_cl': loss_cl, 'loss_simm':loss_simm}
+
+        return {'loss': loss}
     
     def on_train_epoch_end(self):
         # we empty the batch_acc list for next epoch
@@ -235,8 +231,8 @@ class VPRModel(pl.LightningModule):
     # this is the way Pytorch Lghtning is made. All about modularity, folks.
     def validation_step(self, batch, batch_idx, dataloader_idx=None):
         places, _ = batch
-        output  = self(places)
-        descriptors, _, _= output
+        descriptors  = self(places)
+
         if torch.isnan(descriptors).any():
             raise ValueError('NaNs in descriptors')
         self.val_outputs[dataloader_idx].append(descriptors.detach().cpu())

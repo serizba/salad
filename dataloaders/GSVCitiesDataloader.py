@@ -76,11 +76,24 @@ class GSVCitiesDataModule(pl.LightningDataModule):
         self.persistent_workers = persistent_workers
         self.save_hyperparameters() # save hyperparameter with Pytorch Lightening
 
+        # self.train_transform = T.Compose([
+        #     T.Resize(image_size, interpolation=T.InterpolationMode.BILINEAR),
+        #     T.RandAugment(num_ops=3, interpolation=T.InterpolationMode.BILINEAR), #------------> Augment 조정
+        #     T.ToTensor(),
+        #     T.Normalize(mean=self.mean_dataset, std=self.std_dataset),
+        # ])
+
         self.train_transform = T.Compose([
             T.Resize(image_size, interpolation=T.InterpolationMode.BILINEAR),
-            T.RandAugment(num_ops=3, interpolation=T.InterpolationMode.BILINEAR),
+            # T.RandomHorizontalFlip(),
+            T.ColorJitter(0.3, 0.3, 0.3, 0.3),
+            T.RandomEqualize(),
+            T.RandomAdjustSharpness(sharpness_factor=2),
+            # T.RandomPosterize(bits=2),
+            # T.RandomGrayscale(),
             T.ToTensor(),
-            T.Normalize(mean=self.mean_dataset, std=self.std_dataset),
+            T.Normalize(
+                mean=self.mean_dataset, std=self.std_dataset),
         ])
 
         self.valid_transform = T.Compose([

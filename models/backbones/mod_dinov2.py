@@ -15,7 +15,7 @@ class Mlp(nn.Module):
     def __init__(self, in_features, out_features=None, act_layer=nn.GELU, drop=0., group=1):
         super().__init__()
         out_features = out_features or in_features
-        hidden_features = in_features // 4
+        hidden_features = in_features 
 
         self.fc1 = nn.Linear(in_features, hidden_features)
         self.fc2 = nn.Linear(hidden_features, out_features)
@@ -35,23 +35,23 @@ class Mlp(nn.Module):
         return x
 
 class Predictor(nn.Module):
-    def __init__(self, num_patch, embed_dim):
+    def __init__(self, in_features, out_features):
         super().__init__()
-        self.embed_dim = embed_dim
-        self.num_patch = num_patch
+        self.in_features = in_features
+        self.out_features = out_features
         self.in_conv = nn.Sequential(
             # nn.LayerNorm(self.embed_dim * self.num_patch * 2),
-            nn.Linear(self.embed_dim * self.num_patch, self.num_patch),
+            nn.Linear(self.in_features , self.out_features),
             # nn.Tanh()
         )
 
     def forward(self, x):
         # x1, x2 ---> B, NP, DIM
         B, NP, DIM = x.shape
-        x = x.reshape(B, NP * DIM)
+        # x = x.reshape(B, NP * DIM)
         x = self.in_conv(x) # x ---> B* NP
         # softmax를 한 번 거쳐서 out을 해야할지...?
-        x = x.reshape(B, NP)
+        x = x.squeeze()
         return x
 
 class mod_DINOv2(nn.Module):
@@ -92,8 +92,9 @@ class mod_DINOv2(nn.Module):
         self.masking_rate = self.num_masks / self.num_patches
         self.kept_patches_row = int((self.num_patches - self.num_masks) ** 0.5)
 
-        # self.predictor = Predictor(num_patch=self.num_patches , embed_dim=self.num_channels)
-        self.predictor = Mlp(in_features=self.num_channels , out_features=1)
+        self.predictor = Predictor(in_features=self.num_channels, out_features=1)
+        self.selector = Predictor(in_features=self.num_channels, out_features=1)
+        # self.predictor = Mlp(in_features=self.num_channels , out_features=1)
 
 
     def calc_cosine(
@@ -126,22 +127,64 @@ class mod_DINOv2(nn.Module):
     def prune_patch(
         self, 
         f: torch.Tensor, #.....................................................| B, NP, DIM
-        simm: torch.Tensor
     ):
         B, NP, DIM = f.shape
         NK = NP - self.num_masks
 
-        mask_hard = gumbel_topk(simm, k=NK, dim=1)
-        masked_f = f * mask_hard 
+        cosine_sim = - torch.nn.functional.cosine_similarity(f.unsqueeze(1), f.unsqueeze(2), dim=3)
+        mean_sim = torch.mean(cosine_sim, dim=2) # BS, NP
+
+
+
+        mask_hard = gumbel_topk(mean_sim, k=NK, dim=1)
+        mask_hard = mask_hard.unsqueeze(-1)
         
         indices = mask_hard.detach().bool()  # ................| B, NP, 1
-        indices = indices.expand_as(masked_f)  # .............| B, NP, DIM
-        masked_f = masked_f[indices].reshape(B, NK, DIM)
+        indices = indices.expand_as(f)  # .............| B, NP, DIM
+        masked_f = f[indices].reshape(B, NK, DIM)
         
         return masked_f
+    
+    def forward(self, x):
+        B, C, H, W = x.shape
 
+        x = self.model.prepare_tokens_with_masks(x)
+        # First blocks are frozen
+        # forward_pre
+        with torch.no_grad():
+            for blk in self.model.blocks[:-self.num_trainable_blocks]:
+                x = blk(x)
+        x = x.detach()
+
+        x = self.model.blocks[-self.num_trainable_blocks](x)
+
+        t = x[:, 0, None]
+        f = x[:, 1:] # BS, NP, DIM
+
+        pruned_f = self.prune_patch(f)
+        x = torch.cat([t, pruned_f], dim=1)
+
+        # Last blocks are trained
+        for blk in self.model.blocks[-(self.num_trainable_blocks-1):]:
+            x = blk(x)
+
+        if self.norm_layer:
+            x = self.model.norm(x)
+        
+        t = x[:, 0]
+        f = x[:, 1:]
+
+        f = f.reshape((B, self.kept_patches, self.kept_patches, self.num_channels)).permute(0, 3, 1, 2) 
+
+        if self.return_token:
+            return f, t
+        return f
+
+
+
+"""
     def forward(self, x, calc_cosine:bool=True):
-        """
+
         The forward method for the DINOv2 class
 
         Parameters:
@@ -150,7 +193,7 @@ class mod_DINOv2(nn.Module):
         Returns:
             f (torch.Tensor): The feature map [B, C, H // 14, W // 14].
             t (torch.Tensor): The token [B, C]. This is only returned if return_token is True.
-        """
+
 
         B, C, H, W = x.shape
 
@@ -178,13 +221,13 @@ class mod_DINOv2(nn.Module):
         pred_simm = self.predict_cosine(f)
 
         if simm is not None: # in training phase
-            weighted_f = f * simm
-            # weighted_f = self.prune_patch(f, simm)
+            # weighted_f = f * simm
+            weighted_f = self.prune_patch(f, simm)
             x = torch.cat([t, weighted_f], dim=1)
 
         else: # in val/test phase
-            # weighted_f = self.prune_patch(f, pred_simm)
-            weighted_f = f * pred_simm
+            weighted_f = self.prune_patch(f, pred_simm)
+            # weighted_f = f * pred_simm
             x = torch.cat([t, weighted_f], dim=1)
         
         # Last blocks are trained
@@ -204,16 +247,17 @@ class mod_DINOv2(nn.Module):
         #     f = f.reshape((B, self.kept_patches, self.kept_patches, self.num_channels)).permute(0, 3, 1, 2)   
         
         # for full patch
-        f = f.reshape((B, H // 14, W // 14, self.num_channels)).permute(0, 3, 1, 2)
+        # f = f.reshape((B, H // 14, W // 14, self.num_channels)).permute(0, 3, 1, 2)
 
         # for pruned patch
-        # f = f.reshape((B, self.kept_patches, self.kept_patches, self.num_channels)).permute(0, 3, 1, 2)   
+        f = f.reshape((B, self.kept_patches, self.kept_patches, self.num_channels)).permute(0, 3, 1, 2)   
         
 
         if self.return_token:
             return f, t, pred_simm, simm
         return f, pred_simm, simm
 
+"""
 
 if __name__ == '__main__':
     import timm
