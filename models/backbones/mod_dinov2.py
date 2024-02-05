@@ -69,7 +69,7 @@ class mod_DINOv2(nn.Module):
             self,
             model_name='dinov2_vitb14',
             img_size: int=224,
-            num_trainable_blocks=4,
+            num_trainable_blocks: list=[3, 6, 9],
             norm_layer=False,
             return_token=False,
             masking_rate: float=0.4
@@ -123,6 +123,32 @@ class mod_DINOv2(nn.Module):
         pred_simm = pred_simm.unsqueeze(-1)  #.................................| B, NP, 1
         
         return pred_simm
+    
+    def random_mask(self, B, NP, NK):
+        all_tensors_ = []
+        for _ in range(B):
+            perm = torch.randperm(NP)
+            idx = perm[:NK]
+            tensor_ = torch.zeros(NP, dtype=torch.float)
+            tensor_[idx] = 1
+            all_tensors_.append(tensor_)
+        
+        all_tensors_ = torch.stack(all_tensors_)
+
+        return all_tensors_
+    
+    def checker_mask(self, B, NP):
+        rows = int(NP ** 0.5)
+
+        grid_mask = torch.zeros((rows, rows), dtype=torch.float)
+        grid_mask[::2, ::2] = 1
+        grid_mask[1::2, 1::2] = 1
+
+        grid_mask = grid_mask.view(-1)
+        grid_mask = grid_mask.expand(B, NP)
+
+        return grid_mask
+
 
     def prune_patch(
         self, 
@@ -131,17 +157,27 @@ class mod_DINOv2(nn.Module):
         B, NP, DIM = f.shape
         NK = NP - self.num_masks
 
-        cosine_sim = - torch.nn.functional.cosine_similarity(f.unsqueeze(1), f.unsqueeze(2), dim=3)
-        mean_sim = torch.mean(cosine_sim, dim=2) # BS, NP
+        # cosine_sim = - torch.nn.functional.cosine_similarity(f.unsqueeze(1), f.unsqueeze(2), dim=3)
+        # mean_sim = torch.mean(cosine_sim, dim=2) # BS, NP
 
+        # mask_hard = gumbel_topk(mean_sim, k=NK, dim=1)
+        # mask_hard = mask_hard.unsqueeze(-1)
 
+        # for random mask
+        mask_hard = self.random_mask(B, NP, NK)
 
-        mask_hard = gumbel_topk(mean_sim, k=NK, dim=1)
+        # for checker mask
+        # mask_hard = self.checker_mask(B, NP)
+
         mask_hard = mask_hard.unsqueeze(-1)
+        mask_hard = mask_hard.to(f.device)
+
+        masked_f = f * mask_hard
         
         indices = mask_hard.detach().bool()  # ................| B, NP, 1
-        indices = indices.expand_as(f)  # .............| B, NP, DIM
-        masked_f = f[indices].reshape(B, NK, DIM)
+        indices = indices.expand_as(masked_f)  # .............| B, NP, DIM
+        masked_f = masked_f[indices].reshape(B, -1, DIM)
+        # print(masked_f.shape)
         
         return masked_f
     
@@ -151,22 +187,31 @@ class mod_DINOv2(nn.Module):
         x = self.model.prepare_tokens_with_masks(x)
         # First blocks are frozen
         # forward_pre
-        with torch.no_grad():
-            for blk in self.model.blocks[:-self.num_trainable_blocks]:
+        # with torch.no_grad():
+        #     for blk in self.model.blocks[:self.num_trainable_blocks[0]]: # self.num_trainable_blocks[0] = 3
+        #         x = blk(x)
+        # x = x.detach()
+
+        for i, blk in enumerate(self.model.blocks):
+            if i < self.num_trainable_blocks[0]:
+                with torch.no_grad():
+                    x = blk(x)
+            elif i in self.num_trainable_blocks:
+                if i == self.num_trainable_blocks[0]:
+                    x = x.detach()
+                
+                t = x[:, 0, None]
+                f = x[:, 1:]
+
+                pruned_f = 
+
+                # pruning something
+                x = torch.cat([t, pruned_f], dim=1)
+
+                # after pruing, go to transformer block
                 x = blk(x)
-        x = x.detach()
-
-        x = self.model.blocks[-self.num_trainable_blocks](x)
-
-        t = x[:, 0, None]
-        f = x[:, 1:] # BS, NP, DIM
-
-        pruned_f = self.prune_patch(f)
-        x = torch.cat([t, pruned_f], dim=1)
-
-        # Last blocks are trained
-        for blk in self.model.blocks[-(self.num_trainable_blocks-1):]:
-            x = blk(x)
+            else:
+                x = blk(x)
 
         if self.norm_layer:
             x = self.model.norm(x)
@@ -174,7 +219,8 @@ class mod_DINOv2(nn.Module):
         t = x[:, 0]
         f = x[:, 1:]
 
-        f = f.reshape((B, self.kept_patches, self.kept_patches, self.num_channels)).permute(0, 3, 1, 2) 
+        # f = f.reshape((B, int(self.num_patches ** 0.5), int((self.num_patches ** 0.5 ) // 2), self.num_channels)).permute(0, 3, 1, 2) 
+        f = f.reshape((B, self.kept_patches, self.kept_patches, self.num_channels)).permute(0, 3, 1, 2)
 
         if self.return_token:
             return f, t

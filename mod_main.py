@@ -20,7 +20,7 @@ if __name__ == '__main__':
         shuffle_all=False, # shuffle all images or keep shuffling in-city only
         random_sample_from_each_place=True,
         image_size=(224, 224),
-        num_workers=10,
+        num_workers=16,
         persistent_workers=True, # for CPU
         show_data_stats=True,
         val_set_names=[
@@ -42,6 +42,7 @@ if __name__ == '__main__':
             'num_trainable_blocks': 4,
             'return_token': True,
             'norm_layer': True,
+            'masking_rate': 0.5,
         },
         
         agg_arch='SALAD',
@@ -100,8 +101,8 @@ if __name__ == '__main__':
     # )
     trainer = pl.Trainer(
         accelerator='gpu', 
-        # strategy = DeepSpeedStrategy(),
-        devices=1,
+        # strategy=DeepSpeedStrategy(),
+        devices=[2],
         default_root_dir=f'./logs/', # Tensorflow can be used to viz 
         num_nodes=1,
         num_sanity_val_steps=0, # runs a validation step before stating training

@@ -2,6 +2,7 @@ import numpy as np
 import faiss
 import faiss.contrib.torch_utils
 from prettytable import PrettyTable
+import torch
 
 
 def get_validation_recalls(r_list, q_list, k_values, gt, print_results=True, faiss_gpu=False, dataset_name='dataset without name ?', testing=False):
@@ -17,6 +18,8 @@ def get_validation_recalls(r_list, q_list, k_values, gt, print_results=True, fai
         else:
             faiss_index = faiss.IndexFlatL2(embed_size)
         
+        r_list = r_list.to(dtype=torch.float32)
+        q_list = q_list.to(dtype=torch.float32)
         # add references
         faiss_index.add(r_list)
 
