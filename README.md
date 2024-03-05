@@ -89,3 +89,15 @@ This code is based on the amazing work of:
  - [MixVPR](https://github.com/amaralibey/MixVPR)
  - [GSV-Cities](https://github.com/amaralibey/gsv-cities)
  - [DINOv2](https://github.com/facebookresearch/dinov2)
+
+## Cite
+Here is the bibtex to cite our paper
+```
+@InProceedings{Izquierdo_CVPR_2024_SALAD,
+    author    = {Izquierdo, Sergio and Civera, Javier},
+    title     = {Optimal Transport Aggregation for Visual Place Recognition},
+    booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+    month     = {June},
+    year      = {2024},
+}
+```
