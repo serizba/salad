@@ -10,10 +10,11 @@ from utils.validation import get_validation_recalls
 # Dataloader
 from dataloaders.val.NordlandDataset import NordlandDataset
 from dataloaders.val.MapillaryDataset import MSLS
+from dataloaders.val.MapillaryTestDataset import MSLSTest
 from dataloaders.val.PittsburghDataset import PittsburghDataset
 from dataloaders.val.SPEDDataset import SPEDDataset
 
-VAL_DATASETS = ['MSLS', 'pitts30k_test', 'pitts250k_test', 'Nordland', 'SPED']
+VAL_DATASETS = ['MSLS', 'MSLS_Test', 'pitts30k_test', 'pitts250k_test', 'Nordland', 'SPED']
 
 
 def input_transform(image_size=None):
@@ -146,6 +147,8 @@ if __name__ == '__main__':
 
         print('total_size', descriptors.shape[0], num_queries + num_references)
 
+        testing = isinstance(val_dataset, MSLSTest)
+
         preds = get_validation_recalls(
             r_list=r_list,
             q_list=q_list,
@@ -154,8 +157,11 @@ if __name__ == '__main__':
             print_results=True,
             dataset_name=val_name,
             faiss_gpu=False,
-            testing=False,
+            testing=testing,
         )
+
+        if testing:
+            val_dataset.save_predictions(preds, args.ckpt_path + '.' + model.agg_arch + '.preds.txt')
 
         del descriptors
         print('========> DONE!\n\n')
