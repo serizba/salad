@@ -1,35 +1,56 @@
 import torch
 import torch.nn as nn
 
-# Code from SuperGlue (https://github.com/magicleap/SuperGluePretrainedNetwork/blob/master/models/superglue.py)
-def log_sinkhorn_iterations(Z: torch.Tensor, log_mu: torch.Tensor, log_nu: torch.Tensor, iters: int) -> torch.Tensor:
-    """ Perform Sinkhorn Normalization in Log-space for stability"""
-    u, v = torch.zeros_like(log_mu), torch.zeros_like(log_nu)
-    for _ in range(iters):
-        u = log_mu - torch.logsumexp(Z + v.unsqueeze(1), dim=2)
-        v = log_nu - torch.logsumexp(Z + u.unsqueeze(2), dim=1)
-    return Z + u.unsqueeze(2) + v.unsqueeze(1)
+# Code adapted from OpenGlue, MIT license
+# https://github.com/ucuapps/OpenGlue/blob/main/models/superglue/optimal_transport.py
+def log_otp_solver(log_a, log_b, M, num_iters: int = 20, reg: float = 1.0) -> torch.Tensor:
+    r"""Sinkhorn matrix scaling algorithm for Differentiable Optimal Transport problem.
+    This function solves the optimization problem and returns the OT matrix for the given parameters.
+    Args:
+        log_a : torch.Tensor
+            Source weights
+        log_b : torch.Tensor
+            Target weights
+        M : torch.Tensor
+            metric cost matrix
+        num_iters : int, default=100
+            The number of iterations.
+        reg : float, default=1.0
+            regularization value
+    """
+    M = M / reg  # regularization
 
-# Code from SuperGlue (https://github.com/magicleap/SuperGluePretrainedNetwork/blob/master/models/superglue.py)
-def log_optimal_transport(scores: torch.Tensor, alpha: torch.Tensor, iters: int) -> torch.Tensor:
-    """ Perform Differentiable Optimal Transport in Log-space for stability"""
-    b, m, n = scores.shape
-    one = scores.new_tensor(1)
-    ms, ns, bs = (m*one).to(scores), (n*one).to(scores), ((n-m)*one).to(scores)
+    u, v = torch.zeros_like(log_a), torch.zeros_like(log_b)
 
-    bins = alpha.expand(b, 1, n)
-    alpha = alpha.expand(b, 1, 1)
-    
-    couplings = torch.cat([scores, bins], 1)
+    for _ in range(num_iters):
+        u = log_a - torch.logsumexp(M + v.unsqueeze(1), dim=2).squeeze()
+        v = log_b - torch.logsumexp(M + u.unsqueeze(2), dim=1).squeeze()
 
-    norm = - (ms + ns).log()
-    log_mu = torch.cat([norm.expand(m), bs.log()[None] + norm])
-    log_nu = norm.expand(n)
-    log_mu, log_nu = log_mu[None].expand(b, -1), log_nu[None].expand(b, -1)
+    return M + u.unsqueeze(2) + v.unsqueeze(1)
 
-    Z = log_sinkhorn_iterations(couplings, log_mu, log_nu, iters)
-    Z = Z - norm  # multiply probabilities by M+N
-    return Z
+# Code adapted from OpenGlue, MIT license
+# https://github.com/ucuapps/OpenGlue/blob/main/models/superglue/superglue.py
+def get_matching_probs(S, dustbin_score = 1.0, num_iters=3, reg=1.0):
+    """sinkhorn"""
+    batch_size, m, n = S.size()
+    # augment scores matrix
+    S_aug = torch.empty(batch_size, m + 1, n, dtype=S.dtype, device=S.device)
+    S_aug[:, :m, :n] = S
+    S_aug[:, m, :] = dustbin_score
+
+    # prepare normalized source and target log-weights
+    norm = -torch.tensor(math.log(n + m), device=S.device)
+    log_a, log_b = norm.expand(m + 1).contiguous(), norm.expand(n).contiguous()
+    log_a[-1] = log_a[-1] + math.log(n-m)
+    log_a, log_b = log_a.expand(batch_size, -1), log_b.expand(batch_size, -1)
+    log_P = log_otp_solver(
+        log_a,
+        log_b,
+        S_aug,
+        num_iters=num_iters,
+        reg=reg
+    )
+    return log_P - norm
 
 
 class SALAD(nn.Module):
@@ -102,7 +123,7 @@ class SALAD(nn.Module):
         t = self.token_features(t)
 
         # Sinkhorn algorithm
-        p = log_optimal_transport(p, self.dust_bin, 3)
+        p = get_matching_probs(p, self.dust_bin, 3)
         p = torch.exp(p)
         # Normalize to maintain mass
         p = p[:, :-1, :]
